@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+
+import os
+import argparse
+import json
+import ConfigParser
+import yaml
+from time import time
+
+class FuelInventory(object):
+
+    def __init__(self):
+        """ Main execution path """
+
+        self.inventory = dict()  # A list of groups and the hosts in that group
+        self.cache = dict()  # Details about hosts in the inventory
+
+        # Read settings and parse CLI arguments
+        self.read_settings()
+        self.parse_cli_args()
+        # Cache
+        if self.args.refresh_cache:
+            self.update_cache()
+        elif not self.is_cache_valid():
+            self.update_cache()
+        else:
+            self.load_inventory_from_cache()
+            self.load_cache_from_cache()
+
+        data_to_print = ""
+        # Data to print
+        if self.args.host:
+            data_to_print += self.get_host_info()
+        else:
+            self.inventory['_meta'] = { 'hostvars': {} }
+            for hostname in self.cache:
+                self.inventory['_meta']['hostvars'][hostname] = {'fuel': self.cache[hostname] }
+            data_to_print += self.json_format_dict(self.inventory, True)
+
+        print(data_to_print)
+
+
+    def get_host_info(self):
+        """ Get variables about a specific host """
+
+        if not self.cache or len(self.cache) == 0:
+            # Need to load index from cache
+            self.load_cache_from_cache()
+
+        if not self.args.host in self.cache:
+            # try updating the cache
+            self.update_cache()
+
+            if not self.args.host in self.cache:
+                # host might not exist anymore
+                return self.json_format_dict({}, True)
+
+        return self.json_format_dict(self.cache[self.args.host], True)
+
+
+    def load_inventory_from_cache(self):
+        """ Reads the index from the cache file sets self.index """
+
+        cache = open(self.cache_path_inventory, 'r')
+        json_inventory = cache.read()
+        self.inventory = json.loads(json_inventory)
+
+    def load_cache_from_cache(self):
+        """ Reads the cache from the cache file sets self.cache """
+
+        cache = open(self.cache_path_cache, 'r')
+        json_cache = cache.read()
+        self.cache = json.loads(json_cache)
+
+
+    def is_cache_valid(self):
+        """ Determines if the cache files have expired, or if it is still valid """
+
+        if os.path.isfile(self.cache_path_cache):
+            mod_time = os.path.getmtime(self.cache_path_cache)
+            current_time = time()
+            if (mod_time + self.cache_max_age) > current_time:
+                if os.path.isfile(self.cache_path_inventory):
+                    return True
+
+        return False
+
+
+    def update_cache(self):
+        """ Make calls to fuel and save the output in a cache """
+
+        cluster_file = '/etc/fuel/cluster/{0}/astute.yaml'.format(self.cluster_id)
+        data = self.load_yaml_data(cluster_file)
+
+        for node, v in data['network_metadata']['nodes'].items():
+
+            self.cache[node] = v
+
+            for role in v['node_roles']:
+                if role in self.inventory:
+                    self.inventory[role].append(k)
+                else:
+                    self.inventory[role] = [node]
+
+        self.write_to_cache(self.cache, self.cache_path_cache)
+        self.write_to_cache(self.inventory, self.cache_path_inventory)
+
+
+    def write_to_cache(self, data, filename):
+        """ Writes data in JSON format to a file """
+        json_data = self.json_format_dict(data, True)
+        cache = open(filename, 'w')
+        cache.write(json_data)
+        cache.close()
+
+
+    def load_yaml_data(self,filename):
+
+        with open(filename) as f:
+            data = yaml.load(f)
+            return data
+
+    def read_settings(self):
+        """ Reads the settings from the fuel.ini file """
+
+        config = ConfigParser.SafeConfigParser()
+        config.read(os.path.dirname(os.path.realpath(__file__)) + '/fuel.ini')
+
+        self.cluster_id = config.get('fuel', 'cluster')
+
+        # Cache related
+        cache_path = config.get('fuel', 'cache_path')
+        self.cache_path_cache = cache_path + "/ansible-fuel.cache"
+        self.cache_path_inventory = cache_path + "/ansible-fuel.index"
+        self.cache_max_age = config.getint('fuel', 'cache_max_age')
+
+
+    def parse_cli_args(self):
+        """ Command line argument processing """
+
+        parser = argparse.ArgumentParser(description='Produce an Ansible Inventory file based on Cobbler')
+        parser.add_argument('--list', action='store_true', default=True, help='List instances (default: True)')
+        parser.add_argument('--host', action='store', help='Get all the variables about a specific instance')
+        parser.add_argument('--refresh-cache', action='store_true', default=False,
+                            help='Force refresh of cache by making API requests to fuel (default: False - use cache files)')
+        self.args = parser.parse_args()
+
+
+    def json_format_dict(self, data, pretty=False):
+        """ Converts a dict to a JSON object and dumps it as a formatted string """
+
+        if pretty:
+            return json.dumps(data, sort_keys=True, indent=2)
+        else:
+            return json.dumps(data)
+
+
+FuelInventory()
