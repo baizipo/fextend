@@ -1,0 +1,4 @@
+---
+- hosts: primary-controller, controller
+  roles:
+    - novnc

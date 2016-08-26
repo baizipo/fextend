@@ -1,0 +1,4 @@
+---
+# handlers file for novnc
+- name: restart nova
+  service: name=nova-consoleauth state=restarted

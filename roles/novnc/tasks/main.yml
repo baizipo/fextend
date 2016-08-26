@@ -1,0 +1,23 @@
+- name: get memcached_servers from /etc/nova/nova.conf keystone_authtoken section
+  openstack_config: action=r filename=/etc/nova/nova.conf section=keystone_authtoken key=memcached_servers
+  register: config
+
+- name: write memcache_servers to /etc/nova/nova.conf cache section
+  openstack_config: action=w filename=/etc/nova/nova.conf section=cache key=memcache_servers value={{ config.value }}
+  when: config.value
+  notify: restart nova
+
+- name: write backend to /etc/nova/nova.conf cache section
+  openstack_config: action=w filename=/etc/nova/nova.conf section=cache key=backend value=oslo_cache.memcache_pool
+  notify: restart nova
+
+- name: write enabled to /etc/nova/nova.conf cache section
+  openstack_config: action=w filename=/etc/nova/nova.conf section=cache key=enabled value=True
+  notify: restart nova
+
+- name: delete memcached_servers
+  openstack_config: action=d filename=/etc/nova/nova.conf section=keystone_authtoken key=memcached_servers
+  notify: restart nova
+
+- name: test debug
+  debug: msg={{ config.value }}
